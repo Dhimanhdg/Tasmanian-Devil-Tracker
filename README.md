@@ -1,5 +1,8 @@
 # 😈 Save the Tasmanian Devil: Disease & Genetic Tracker
 
+> [!NOTE]
+> **Disclaimer**: All data within this project is synthetic and simulated (generated using Python's `Faker` library). This application is built strictly for educational demonstration, awareness, and showcasing advanced database engineering workflows. It does not represent live clinical tracking records of real animals.
+
 An interactive, research-grade conservation console built with **Streamlit** and a dual-mode database engine (**MySQL & serverless SQLite**). This tracker monitors the spread of Devil Facial Tumor Disease (DFTD) and recommends optimal breeding pairs to prevent inbreeding depression and maintain immune diversity across Tasmanian sanctuaries.
 
 📊 **Live Demo**: [tasmanian-devil-tracker.streamlit.app](https://tasmanian-devil-tracker-o79hhont7e7lqfzjwk2gnc.streamlit.app/)
