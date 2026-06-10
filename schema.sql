@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS `devils` (
     `father_id` INT NULL,
     `current_sanctuary_id` INT NOT NULL,
     `status` ENUM('Alive', 'Deceased') NOT NULL DEFAULT 'Alive',
+    `mhc_allele_1` VARCHAR(20) NULL,
+    `mhc_allele_2` VARCHAR(20) NULL,
     `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT `fk_devils_mother` FOREIGN KEY (`mother_id`) REFERENCES `devils` (`devil_id`) ON DELETE SET NULL,
     CONSTRAINT `fk_devils_father` FOREIGN KEY (`father_id`) REFERENCES `devils` (`devil_id`) ON DELETE SET NULL,

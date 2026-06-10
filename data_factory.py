@@ -21,88 +21,130 @@ fake = Faker()
 Faker.seed(42)
 random.seed(42)
 
+USE_SQLITE = os.getenv("USE_SQLITE", "False").lower() == "true"
+
 def get_db_connection(include_db=True):
-    """Establish a connection to MySQL, loading environment variables dynamically."""
-    load_dotenv(dotenv_path, override=True) # Force reload in case .env was modified
-    db_host = os.getenv("DB_HOST", "127.0.0.1")
-    db_port = int(os.getenv("DB_PORT", 3306))
-    db_user = os.getenv("DB_USER", "root")
-    db_password = os.getenv("DB_PASSWORD", "dhiman@650")
-    db_name = os.getenv("DB_NAME", "devil_tracker")
-    
-    config = {
-        "host": db_host,
-        "port": db_port,
-        "user": db_user,
-        "password": db_password,
-        "autocommit": True
-    }
-    if include_db:
-        config["database"] = db_name
-    return mysql.connector.connect(**config)
+    """Establish a connection to MySQL, falling back to SQLite if it fails."""
+    global USE_SQLITE
+    if USE_SQLITE:
+        import sqlite3
+        db_path = os.path.join(os.path.dirname(__file__), "devil_tracker.db")
+        conn = sqlite3.connect(db_path)
+        # Enable foreign keys in SQLite
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
+        
+    try:
+        load_dotenv(dotenv_path, override=True)
+        db_host = os.getenv("DB_HOST", "127.0.0.1")
+        db_port = int(os.getenv("DB_PORT", 3306))
+        db_user = os.getenv("DB_USER", "root")
+        db_password = os.getenv("DB_PASSWORD", "dhiman@650")
+        db_name = os.getenv("DB_NAME", "devil_tracker")
+        
+        config = {
+            "host": db_host,
+            "port": db_port,
+            "user": db_user,
+            "password": db_password,
+            "autocommit": True
+        }
+        if include_db:
+            config["database"] = db_name
+        return mysql.connector.connect(**config)
+    except Exception as e:
+        print(f"MySQL connection failed: {e}. Falling back to SQLite...")
+        USE_SQLITE = True
+        import sqlite3
+        db_path = os.path.join(os.path.dirname(__file__), "devil_tracker.db")
+        conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
+
+def db_execute(cursor, sql, params=None):
+    """Execute a single query, translating placeholder formatting for SQLite if needed."""
+    if USE_SQLITE:
+        sql = sql.replace("%s", "?")
+    if params:
+        cursor.execute(sql, params)
+    else:
+        cursor.execute(sql)
+
+def db_executemany(cursor, sql, params):
+    """Execute batch insert queries, translating placeholder formatting for SQLite if needed."""
+    if USE_SQLITE:
+        sql = sql.replace("%s", "?")
+    cursor.executemany(sql, params)
 
 def init_schema():
-    """Execute schema.sql to initialize the database structure and create the trigger."""
-    print("Connecting to MySQL to initialize schema...")
-    # Connect without DB name first to make sure database exists
+    """Execute schema script to initialize the database structure."""
+    global USE_SQLITE
+    print("Connecting to database to initialize schema...")
     conn = get_db_connection(include_db=False)
     cursor = conn.cursor()
     
-    # Read schema file
-    schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
-    with open(schema_path, "r") as f:
-        schema_sql = f.read()
-        
-    print("Executing schema.sql statements...")
-    # Split by semicolon and run each statement
-    for statement in schema_sql.split(";"):
-        stmt = statement.strip()
-        if stmt:
-            cursor.execute(stmt)
+    if USE_SQLITE:
+        print("Executing schema_sqlite.sql...")
+        schema_path = os.path.join(os.path.dirname(__file__), "schema_sqlite.sql")
+        with open(schema_path, "r") as f:
+            schema_sql = f.read()
+        cursor.executescript(schema_sql)
+        conn.commit()
+    else:
+        # Read MySQL schema file
+        schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
+        with open(schema_path, "r") as f:
+            schema_sql = f.read()
             
-    # Also initialize the biosecurity trigger
-    print("Creating biosecurity trigger...")
-    cursor.execute("DROP TRIGGER IF EXISTS before_devil_transfer")
-    
-    trigger_sql = """
-    CREATE TRIGGER before_devil_transfer
-    BEFORE UPDATE ON devils
-    FOR EACH ROW
-    BEGIN
-        DECLARE new_is_clean BOOLEAN;
-        DECLARE latest_strain_id INT;
-        DECLARE latest_pcr VARCHAR(20);
-        
-        -- Check if the destination sanctuary is a clean zone
-        SELECT is_clean_zone INTO new_is_clean
-        FROM sanctuaries
-        WHERE sanctuary_id = NEW.current_sanctuary_id;
-        
-        -- Only perform biosecurity checks if the location is changing
-        IF NEW.current_sanctuary_id <> OLD.current_sanctuary_id THEN
-            -- Check if target sanctuary is a clean zone
-            IF new_is_clean = TRUE THEN
-                -- Get the latest health log for the devil being moved
-                SELECT detected_strain_id, pcr_result INTO latest_strain_id, latest_pcr
-                FROM health_logs
-                WHERE devil_id = NEW.devil_id
-                ORDER BY log_date DESC, log_id DESC
-                LIMIT 1;
+        print("Executing schema.sql statements on MySQL...")
+        for statement in schema_sql.split(";"):
+            stmt = statement.strip()
+            if stmt:
+                cursor.execute(stmt)
                 
-                -- If the latest log is positive for any disease strain (DFT1/DFT2), abort the transfer
-                IF latest_strain_id <> 1 OR latest_pcr = 'Positive' THEN
-                    SIGNAL SQLSTATE '45000'
-                    SET MESSAGE_TEXT = 'Biosecurity Breach: Cannot transfer DFTD-positive or symptomatic animal to a clean insurance sanctuary.';
+        # Also initialize the biosecurity trigger for MySQL
+        print("Creating biosecurity trigger...")
+        cursor.execute("DROP TRIGGER IF EXISTS before_devil_transfer")
+        
+        trigger_sql = """
+        CREATE TRIGGER before_devil_transfer
+        BEFORE UPDATE ON devils
+        FOR EACH ROW
+        BEGIN
+            DECLARE new_is_clean BOOLEAN;
+            DECLARE latest_strain_id INT;
+            DECLARE latest_pcr VARCHAR(20);
+            
+            -- Check if the destination sanctuary is a clean zone
+            SELECT is_clean_zone INTO new_is_clean
+            FROM sanctuaries
+            WHERE sanctuary_id = NEW.current_sanctuary_id;
+            
+            -- Only perform biosecurity checks if the location is changing
+            IF NEW.current_sanctuary_id <> OLD.current_sanctuary_id THEN
+                -- Check if target sanctuary is a clean zone
+                IF new_is_clean = TRUE THEN
+                    -- Get the latest health log for the devil being moved
+                    SELECT detected_strain_id, pcr_result INTO latest_strain_id, latest_pcr
+                    FROM health_logs
+                    WHERE devil_id = NEW.devil_id
+                    ORDER BY log_date DESC, log_id DESC
+                    LIMIT 1;
+                    
+                    -- If the latest log is positive for any disease strain (DFT1/DFT2), abort the transfer
+                    IF latest_strain_id <> 1 OR latest_pcr = 'Positive' THEN
+                        SIGNAL SQLSTATE '45000'
+                        SET MESSAGE_TEXT = 'Biosecurity Breach: Cannot transfer DFTD-positive or symptomatic animal to a clean insurance sanctuary.';
+                    END IF;
                 END IF;
             END IF;
-        END IF;
-    END
-    """
-    cursor.execute(trigger_sql)
+        END
+        """
+        cursor.execute(trigger_sql)
             
     cursor.close()
     conn.close()
-    print("Schema and triggers initialized successfully.")
+    print("Schema initialized successfully.")
 
 def populate_static_data(conn):
     """Populate sanctuaries and strains tables."""
@@ -114,7 +156,8 @@ def populate_static_data(conn):
         ("DFT1", 1996, "Devil Facial Tumor Disease Strain 1. Widespread across Tasmania since 1996."),
         ("DFT2", 2014, "Devil Facial Tumor Disease Strain 2. Discovered in 2014, geographically restricted to Channel region.")
     ]
-    cursor.executemany(
+    db_executemany(
+        cursor,
         "INSERT INTO strains (strain_name, discovery_year, description) VALUES (%s, %s, %s)",
         strains_data
     )
@@ -138,7 +181,8 @@ def populate_static_data(conn):
         ("Freycinet Peninsula Zone", "7215", "Wild Capture Zone", 900, False),
         ("Tasmanian Devil Unzoo", "7179", "Captive Breeding Facility", 200, False)
     ]
-    cursor.executemany(
+    db_executemany(
+        cursor,
         "INSERT INTO sanctuaries (name, postcode, type, capacity, is_clean_zone) VALUES (%s, %s, %s, %s, %s)",
         sanctuaries_data
     )
@@ -147,10 +191,12 @@ def populate_static_data(conn):
     cursor.close()
     print("Static data populated (Strains, Sanctuaries).")
 
-def generate_demographics():
+def generate_demographics(conn=None):
     """Generate devils and health logs data."""
-    # Connect and fetch static maps
-    conn = get_db_connection()
+    close_conn = False
+    if conn is None:
+        conn = get_db_connection()
+        close_conn = True
     cursor = conn.cursor()
     
     # Get strains
@@ -299,6 +345,18 @@ def generate_demographics():
                 status = "Alive"
                 death_date = None # Still alive, no death date
                 
+            # MHC Allele generation based on genetic inheritance
+            MHC_ALLELES = ["Saha-I*01", "Saha-I*02", "Saha-I*03", "Saha-I*04", "Saha-I*05", "Saha-I*06"]
+            if mother_id:
+                mhc_1 = random.choice([devils_db[mother_id - 1]["mhc_allele_1"], devils_db[mother_id - 1]["mhc_allele_2"]])
+            else:
+                mhc_1 = random.choice(MHC_ALLELES)
+                
+            if father_id:
+                mhc_2 = random.choice([devils_db[father_id - 1]["mhc_allele_1"], devils_db[father_id - 1]["mhc_allele_2"]])
+            else:
+                mhc_2 = random.choice(MHC_ALLELES)
+                
             devil_info = {
                 "devil_id": devil_id,
                 "name": name,
@@ -311,7 +369,9 @@ def generate_demographics():
                 "is_infected": is_infected,
                 "infection_strain": infection_strain,
                 "infection_date": infection_date,
-                "death_date": death_date
+                "death_date": death_date,
+                "mhc_allele_1": mhc_1,
+                "mhc_allele_2": mhc_2
             }
             
             cohort_devils[c_idx].append(devil_info)
@@ -322,20 +382,20 @@ def generate_demographics():
     # Bulk insert devils
     cursor = conn.cursor()
     insert_devil_sql = """
-    INSERT INTO devils (devil_id, name, sex, birth_date, mother_id, father_id, current_sanctuary_id, status)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    INSERT INTO devils (devil_id, name, sex, birth_date, mother_id, father_id, current_sanctuary_id, status, mhc_allele_1, mhc_allele_2)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
     
     # Prepare batch data
     devils_data = [
-        (d["devil_id"], d["name"], d["sex"], d["birth_date"], d["mother_id"], d["father_id"], d["current_sanctuary_id"], d["status"])
+        (d["devil_id"], d["name"], d["sex"], d["birth_date"], d["mother_id"], d["father_id"], d["current_sanctuary_id"], d["status"], d["mhc_allele_1"], d["mhc_allele_2"])
         for d in devils_db
     ]
     
     # Insert in chunks of 2000
     chunk_size = 2000
     for i in range(0, len(devils_data), chunk_size):
-        cursor.executemany(insert_devil_sql, devils_data[i:i+chunk_size])
+        db_executemany(cursor, insert_devil_sql, devils_data[i:i+chunk_size])
     
     conn.commit()
     print(f"Successfully inserted {len(devils_db)} devils.")
@@ -445,16 +505,18 @@ def generate_demographics():
     """
     
     for i in range(0, len(health_logs_data), chunk_size):
-        cursor.executemany(insert_log_sql, health_logs_data[i:i+chunk_size])
+        db_executemany(cursor, insert_log_sql, health_logs_data[i:i+chunk_size])
         
     conn.commit()
     cursor.close()
     print(f"Successfully inserted {len(health_logs_data)} health logs.")
+    if close_conn:
+        conn.close()
     print("Database populate complete!")
-
+ 
 if __name__ == "__main__":
     init_schema()
     conn = get_db_connection()
     populate_static_data(conn)
-    generate_demographics()
+    generate_demographics(conn)
     conn.close()
