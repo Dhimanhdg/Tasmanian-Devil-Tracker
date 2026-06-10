@@ -2,7 +2,7 @@
 
 An interactive, research-grade conservation console built with **Streamlit** and a dual-mode database engine (**MySQL & serverless SQLite**). This tracker monitors the spread of Devil Facial Tumor Disease (DFTD) and recommends optimal breeding pairs to prevent inbreeding depression and maintain immune diversity across Tasmanian sanctuaries.
 
-📊 **Live Demo**: *[Add your share.streamlit.io URL here!]*
+📊 **Live Demo**: [tasmanian-devil-tracker.streamlit.app](https://tasmanian-devil-tracker-o79hhont7e7lqfzjwk2gnc.streamlit.app/)
 
 ---
 
